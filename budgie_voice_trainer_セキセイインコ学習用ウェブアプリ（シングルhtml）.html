@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<meta name="format-detection" content="telephone=no" />
+<title>Budgie Voice Trainer — Listen/Talk 完全版 (diagnostics)</title>
+<style>
+  :root{--pri:#2dd4bf;--sec:#0ea5e9;--dan:#ef4444;--talk:#22c55e;--listen:#a78bfa;--bg:#0b1220;--panel:#0f1628;--line:#23314d;--text:#e7ecf3;--warn:#f59e0b}
+  html,body{height:100%; -webkit-user-select:none!important; user-select:none!important; -webkit-touch-callout:none!important; overscroll-behavior:contain}
+  *{box-sizing:border-box; -webkit-tap-highlight-color: transparent}
+  *::selection{background:transparent}
+  body{margin:0;background:linear-gradient(180deg,var(--bg),#0f182c);color:#e7ecf3;font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans JP",sans-serif}
+  .safe{padding:calc(env(safe-area-inset-top) + 16px) 16px calc(env(safe-area-inset-bottom) + 24px)}
+  .wrap{max-width:480px;margin:0 auto}
+  h1{margin:0 0 8px;font-size:1.1rem}
+  .badge{display:inline-block;background:#0ea5e9;color:#fff;border-radius:999px;padding:2px 8px;font-size:.72rem;margin-left:8px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px;margin:10px 0}
+  .status{font-size:.9rem}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:center}
+  .btn{appearance:none;border:0;border-radius:12px;padding:12px 14px;font-weight:800;cursor:pointer;min-width:120px;box-shadow:0 6px 18px rgba(0,0,0,.25);touch-action:manipulation;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+  .pri{background:var(--pri);color:#033}
+  .sec{background:var(--sec);color:#fff}
+  .dan{background:var(--dan);color:#fff}
+  .talk{background:var(--talk);color:#052e13}
+  .listen{background:var(--listen);color:#120827}
+  .mut{background:#334155;color:#e7ecf3}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .timer{font-variant-numeric:tabular-nums;background:#0b223d;border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-weight:800;min-width:120px;text-align:center}
+  .hint{font-size:.8rem;color:#a9b8cf}
+  .warn{color:var(--warn)}
+  canvas{display:block;width:100%;height:110px;border:1px solid var(--line);border-radius:12px;background:#0b1220}
+  label.ctrl{display:flex;align-items:center;gap:8px;justify-content:center;font-size:.85rem;color:#a9b8cf}
+  input[type=checkbox]{width:18px;height:18px}
+</style>
+</head>
+<body role="application" oncontextmenu="return false" onselectstart="return false">
+<div class="safe">
+  <div class="wrap">
+    <h1>Budgie Voice Trainer <span class="badge">Listen + Talk</span></h1>
+
+    <!-- 診断＆初期化 -->
+    <div class="panel">
+      <div id="diag" class="hint">診断：未チェック</div>
+      <div class="row" style="margin-top:8px">
+        <button id="initBtn" class="btn sec">▶ 初期化（Audio許可）</button>
+        <button id="permBtn" class="btn mut">🔐 権限チェック</button>
+        <button id="beepBtn" class="btn sec">🔊 テスト音</button>
+      </div>
+    </div>
+
+    <div id="log" class="panel status">準備OK：HTTPSで録音・再生・おしゃべり・<b>聞く（インコ→人間帯域）</b>・モニターが動きます。</div>
+
+    <div class="panel">
+      <canvas id="wave" aria-label="waveform"></canvas>
+      <canvas id="spec" aria-label="spectrum" style="display:none"></canvas>
+    </div>
+
+    <div class="panel row">
+      <span id="timer" class="timer">00:00.0</span>
+      <button id="resetBtn" class="btn mut">↺ リセット</button>
+    </div>
+
+    <div class="panel row">
+      <button id="recBtn"  class="btn pri">🎙 録音開始</button>
+      <button id="stopBtn" class="btn dan" disabled>■ 停止</button>
+      <button id="playBtn" class="btn sec" disabled>▶ 再生</button>
+    </div>
+
+    <div class="panel row">
+      <button id="talkBtn" class="btn talk" title="押している間だけ 2–4kHz に加工して出力（あなた→インコ）">🗣 おしゃべり（押しながら）</button>
+      <button id="listenBtn" class="btn listen" title="押している間、インコ→人間帯域に変換して出力">👂 聞く（押しながら）</button>
+    </div>
+
+    <div class="panel row">
+      <label class="ctrl"><input id="monitorToggle" type="checkbox"> 🎧 モニター（自分の声を出す）</label>
+      <label class="ctrl"><input id="humanPlaybackToggle" type="checkbox" checked> 👂 再生を人間向けに</label>
+      <label class="ctrl"><span>中心周波数</span>
+        <input id="fc" type="range" min="2000" max="4500" step="10" value="3000">
+      </label>
+    </div>
+  </div>
+</div>
+
+<script>
+(()=>{
+  const $=id=>document.getElementById(id);
+  const log=(m)=>{ $('log').innerHTML=m };
+  const diag=(m)=>{ $('diag').innerHTML=m };
+
+  // 画面診断
+  function updateDiag(){
+    const items=[];
+    items.push(`secureContext: <b>${location.protocol}</b> ${isSecureContext? '✅':'<span class="warn">❌ HTTPS/localhostで開いてください</span>'}`);
+    items.push(`getUserMedia: ${navigator.mediaDevices && navigator.mediaDevices.getUserMedia ? '✅':'❌'}`);
+    items.push(`AudioContext: ${window.AudioContext||window.webkitAudioContext? '✅':'❌'}`);
+    diag(items.join('<br>'));
+  }
+  updateDiag();
+
+  // 長押し/選択ポップアップ抑止
+  ['contextmenu','copy','cut','paste','selectstart','selectionchange','pointerhold','gesturestart']
+    .forEach(ev=> document.addEventListener(ev, e=>{ try{ e.preventDefault() }catch(_){} return false }, {capture:true, passive:false}));
+  const hardBlock = (el)=> ['pointerdown','touchstart','mousedown'].forEach(ev=> el.addEventListener(ev, e=>{ if(e.cancelable!==false){ e.preventDefault() } }, {passive:false, capture:true}));
+
+  const wave=$('wave'), ctx2d=wave.getContext('2d');
+  function resizeCanvas(){ const dpr=Math.max(1,devicePixelRatio||1); const r=wave.getBoundingClientRect(); wave.width=Math.max(300,Math.floor(r.width*dpr)); wave.height=Math.max(60,Math.floor(110*dpr/1)); }
+  resizeCanvas(); addEventListener('resize', resizeCanvas);
+
+  let aCtx=null, analyser=null, visRAF=null;
+  const ensure=()=> (aCtx||(aCtx=new (AudioContext||webkitAudioContext)()));
+  function draw(){ if(!analyser) return; const td=new Uint8Array(analyser.fftSize); const loop=()=>{ analyser.getByteTimeDomainData(td); ctx2d.clearRect(0,0,wave.width,wave.height); ctx2d.beginPath(); for(let x=0;x<wave.width;x++){ const y=(td[Math.floor(x*td.length/wave.width)]/255)*wave.height; x?ctx2d.lineTo(x,y):ctx2d.moveTo(x,y);} ctx2d.strokeStyle="#22c55e"; ctx2d.stroke(); visRAF=requestAnimationFrame(loop); }; visRAF=requestAnimationFrame(loop); }
+  function stopDraw(){ if(visRAF) cancelAnimationFrame(visRAF); ctx2d.clearRect(0,0,wave.width,wave.height); }
+
+  function makeChain(ctx,src,type){ const hp=ctx.createBiquadFilter(), pk=ctx.createBiquadFilter(), lp=ctx.createBiquadFilter(); if(type==='talk'){ hp.type='highpass'; hp.frequency.value=900; pk.type='peaking'; pk.frequency.value=parseFloat($('fc').value); pk.gain.value=7; pk.Q.value=1.1; lp.type='lowpass'; lp.frequency.value=6000; } else { hp.type='highpass'; hp.frequency.value=300; pk.type='peaking'; pk.frequency.value=1800; pk.gain.value=5; pk.Q.value=1.0; lp.type='lowpass'; lp.frequency.value=4800; } const out=ctx.createGain(); out.gain.value=0.38; src.connect(hp); hp.connect(pk); pk.connect(lp); lp.connect(out); return out; }
+
+  // 初期化（AudioContext resume）
+  $('initBtn').addEventListener('click', async()=>{ try{ const ctx=ensure(); await ctx.resume(); log('初期化OK：操作を開始できます'); }catch(e){ log('初期化エラー：'+e.message) } updateDiag(); });
+
+  // 権限チェック
+  $('permBtn').addEventListener('click', async()=>{ try{ if(navigator.permissions && navigator.permissions.query){ const p=await navigator.permissions.query({name:'microphone'}); log('マイク権限：'+p.state); } else { log('マイク権限の事前照会は未対応のブラウザです（Safariは非対応）'); } }catch(e){ log('権限チェックエラー：'+e.message) } });
+
+  // テスト音
+  $('beepBtn').addEventListener('click', async()=>{ try{ const ctx=ensure(); await ctx.resume(); const o=ctx.createOscillator(), g=ctx.createGain(); g.gain.value=0.4; o.type='sine'; o.frequency.value=880; o.connect(g); g.connect(ctx.destination); o.start(); setTimeout(()=>{ try{o.stop()}catch(_){} },300); log('テスト音を鳴らしました（音が出ない→音量/サイレント/BTを確認）'); }catch(e){ log('テスト音エラー：'+e.message) } });
+
+  // タイマー
+  const timerEl=$('timer'); let t0=0, tid=null; const fmt=ms=>{ms=Math.max(0,ms);const m=Math.floor(ms/60000),s=Math.floor(ms%60000/1000),d=Math.floor(ms%1000/100);return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${d}`}; const startTimer=()=>{ t0=Date.now(); if(tid) clearInterval(tid); tid=setInterval(()=> timerEl.textContent=fmt(Date.now()-t0), 100)}; const stopTimer=()=>{ if(tid){ clearInterval(tid); tid=null }}; const resetTimer=()=>{ stopTimer(); timerEl.textContent='00:00.0' };
+
+  // おしゃべり（押している間：人→インコ）
+  const talkBtn=$('talkBtn'); ['pointerdown','touchstart','mousedown'].forEach(ev=> talkBtn.addEventListener(ev, async(e)=>{ e.preventDefault(); try{ const ctx=ensure(); await ctx.resume(); const s=await navigator.mediaDevices.getUserMedia({audio:true}); const src=ctx.createMediaStreamSource(s); const out=makeChain(ctx,src,'talk'); out.connect(ctx.destination); analyser=ctx.createAnalyser(); out.connect(analyser); draw(); startTimer(); talkBtn._s=s; log('おしゃべり中…'); }catch(err){ log('おしゃべり開始エラー：'+err.message) } }, {passive:false}));
+  ['pointerup','pointercancel','pointerleave','touchend','mouseup'].forEach(ev=> talkBtn.addEventListener(ev, e=>{ e.preventDefault(); try{ talkBtn._s && talkBtn._s.getTracks().forEach(t=>t.stop()); }catch(_){} stopDraw(); stopTimer(); log('おしゃべり終了'); }, {passive:false}));
+
+  // 聞く（押している間：インコ→人）
+  const listenBtn=$('listenBtn'); ['pointerdown','touchstart','mousedown'].forEach(ev=> listenBtn.addEventListener(ev, async(e)=>{ e.preventDefault(); try{ const ctx=ensure(); await ctx.resume(); const s=await navigator.mediaDevices.getUserMedia({audio:true}); const src=ctx.createMediaStreamSource(s); const out=makeChain(ctx,src,'listen'); out.connect(ctx.destination); analyser=ctx.createAnalyser(); out.connect(analyser); draw(); startTimer(); listenBtn._s=s; log('聞く：変換中'); }catch(err){ log('聞く開始エラー：'+err.message) } }, {passive:false}));
+  ['pointerup','pointercancel','pointerleave','touchend','mouseup'].forEach(ev=> listenBtn.addEventListener(ev, e=>{ e.preventDefault(); try{ listenBtn._s && listenBtn._s.getTracks().forEach(t=>t.stop()); }catch(_){} stopDraw(); stopTimer(); log('聞く：終了'); }, {passive:false}));
+
+  // 録音・再生（人向けEQで再生オプション）
+  const recBtn=$('recBtn'), stopBtn=$('stopBtn'), playBtn=$('playBtn'), humanPlaybackToggle=$('humanPlaybackToggle');
+  let recStream=null, mediaRecorder=null, chunks=[], srcNode=null, proc=null, pcm=[], recBlob=null;
+  recBtn.addEventListener('click', async()=>{ try{ if(!isSecureContext){ log('❌ HTTPSまたはlocalhostで開いてください'); return } const ctx=ensure(); await ctx.resume(); recStream=await navigator.mediaDevices.getUserMedia({audio:true}); if(window.MediaRecorder){ mediaRecorder=new MediaRecorder(recStream); chunks=[]; mediaRecorder.ondataavailable=e=>{ if(e.data.size>0) chunks.push(e.data) }; mediaRecorder.onstop=()=>{ try{recStream.getTracks().forEach(t=>t.stop())}catch(_){} recBlob=new Blob(chunks); playBtn.disabled=false; log('録音完了'); }; mediaRecorder.start(); } else { const src=ctx.createMediaStreamSource(recStream); const an=ctx.createAnalyser(); an.fftSize=2048; src.connect(an); analyser=an; draw(); proc=ctx.createScriptProcessor(4096,1,1); pcm=[]; proc.onaudioprocess=ev=> pcm.push(ev.inputBuffer.getChannelData(0).slice()); src.connect(proc); proc.connect(ctx.destination); srcNode=src; } startTimer(); recBtn.disabled=true; stopBtn.disabled=false; playBtn.disabled=true; log('録音中…'); }catch(e){ log('録音開始エラー：'+e.message) } });
+  stopBtn.addEventListener('click', ()=>{ try{ if(mediaRecorder && mediaRecorder.state!=='inactive'){ mediaRecorder.stop(); } else if(proc && srcNode){ proc.disconnect(); srcNode.disconnect(); const ctx=ensure(); const sr=ctx.sampleRate||48000; let len=0; pcm.forEach(b=>len+=b.length); const data=new Float32Array(len); let off=0; pcm.forEach(b=>{ data.set(b,off); off+=b.length; }); const bps=2, ba=bps*1, br=sr*ba; const ab=new ArrayBuffer(44+data.length*bps); const v=new DataView(ab); const ws=(o,s)=>{ for(let i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)) }; ws(0,'RIFF'); v.setUint32(4,36+data.length*bps,true); ws(8,'WAVE'); ws(12,'fmt '); v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true); v.setUint32(24,sr,true); v.setUint32(28,br,true); v.setUint16(32,ba,true); v.setUint16(34,16,true); ws(36,'data'); v.setUint32(40,data.length*bps,true); let idx=44; for(let i=0;i<data.length;i++){ let s=data[i]; s=Math.max(-1,Math.min(1,s)); v.setInt16(idx, s<0?s*0x8000:s*0x7FFF,true); idx+=2 } recBlob=new Blob([v],{type:'audio/wav'}); try{recStream.getTracks().forEach(t=>t.stop())}catch(_){} playBtn.disabled=false; log('録音完了（WAV）'); } }catch(e){ log('停止エラー：'+e.message) } stopTimer(); recBtn.disabled=false; stopBtn.disabled=true; });
+  playBtn.addEventListener('click', ()=>{ if(!recBlob) return; const ctx=ensure(); const au=new Audio(URL.createObjectURL(recBlob)); au.onplay=()=>{ log('再生中…'); }; au.play(); });
+
+  // リセット（resetBtn はここで一度だけ取得・宣言）
+  const resetBtn=$('resetBtn'); resetBtn.addEventListener('click', (e)=>{ e.preventDefault(); try{ talkBtn._s && talkBtn._s.getTracks().forEach(t=>t.stop()); listenBtn._s && listenBtn._s.getTracks().forEach(t=>t.stop()); recStream && recStream.getTracks().forEach(t=>t.stop()); }catch(_){} mediaRecorder=null; proc=null; srcNode=null; pcm=[]; recBlob=null; recStream=null; stopDraw(); stopTimer(); $('playBtn').disabled=true; $('stopBtn').disabled=true; $('recBtn').disabled=false; log('リセットしました'); updateDiag(); }, {passive:false});
+})();
+</script>
+</body>
+</html>
